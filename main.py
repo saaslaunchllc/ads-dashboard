@@ -76,7 +76,7 @@ def today_utc_range():
 def fetch_leads_today():
     start, end = today_utc_range()
     params = [
-        ("filterByFormula", f"AND({{Created Date}} >= '{start}', {{Created Date}} < '{end}')"),
+        ("filterByFormula", f"AND(CREATED_TIME() >= '{start}', CREATED_TIME() < '{end}')"),
         ("pageSize", 100),
     ]
     for f in LEAD_FIELDS:
@@ -85,10 +85,9 @@ def fetch_leads_today():
 
 
 def fetch_calls_today():
-    now_ny   = datetime.now(TZ)
-    date_str = now_ny.strftime("%Y-%m-%d")
+    start, end = today_utc_range()
     params = [
-        ("filterByFormula", f"{{Scheduled Date}} = '{date_str}'"),
+        ("filterByFormula", f"AND({{Scheduled Date}} >= '{start}', {{Scheduled Date}} < '{end}')"),
         ("pageSize", 100),
     ]
     for f in CALL_FIELDS:
