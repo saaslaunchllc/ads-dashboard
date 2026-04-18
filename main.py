@@ -74,9 +74,8 @@ def today_utc_range():
 
 
 def fetch_leads_today():
-    start, end = today_utc_range()
     params = [
-        ("filterByFormula", f"AND(CREATED_TIME() >= '{start}', CREATED_TIME() < '{end}')"),
+        ("filterByFormula", "IS_SAME(CREATED_TIME(), TODAY(), 'day')"),
         ("pageSize", 100),
     ]
     for f in LEAD_FIELDS:
@@ -85,9 +84,8 @@ def fetch_leads_today():
 
 
 def fetch_calls_today():
-    start, end = today_utc_range()
     params = [
-        ("filterByFormula", f"AND({{Scheduled Date}} >= '{start}', {{Scheduled Date}} < '{end}')"),
+        ("filterByFormula", "IS_SAME({Scheduled Date}, TODAY(), 'day')"),
         ("pageSize", 100),
     ]
     for f in CALL_FIELDS:
