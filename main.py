@@ -63,6 +63,18 @@ def airtable_get(table_id, params):
     return records
 
 
+def is_today(dt_str):
+    """Returns True if the ISO datetime string falls on today in New York time."""
+    if not dt_str:
+        return False
+    try:
+        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        today_ny = datetime.now(TZ).date()
+        return dt.astimezone(TZ).date() == today_ny
+    except Exception:
+        return False
+
+
 def today_utc_range():
     """Returns (start_utc, end_utc) strings covering today in New York time."""
     now_ny    = datetime.now(TZ)
@@ -74,35 +86,47 @@ def today_utc_range():
 
 
 def fetch_leads_today():
+    # Fetch most recent 500 records sorted by created time, filter client-side
     params = [
-        ("filterByFormula", "IS_SAME(CREATED_TIME(), TODAY(), 'day')"),
+        ("sort[0][field]", "fldoFa3xbByG4hLrE"),
+        ("sort[0][direction]", "desc"),
+        ("maxRecords", 500),
         ("pageSize", 100),
     ]
     for f in LEAD_FIELDS:
         params.append(("fields[]", f))
-    return airtable_get(LEADS_TABLE, params)
+    all_records = airtable_get(LEADS_TABLE, params)
+    return [r for r in all_records if is_today(r.get("createdTime", ""))]
 
 
 def fetch_calls_today():
+    # Fetch recent calls, filter by Scheduled Date client-side
     params = [
-        ("filterByFormula", "IS_SAME({Scheduled Date}, TODAY(), 'day')"),
+        ("sort[0][field]", "fldU5rZBoO1ofQ9s1"),
+        ("sort[0][direction]", "desc"),
+        ("maxRecords", 200),
         ("pageSize", 100),
     ]
     for f in CALL_FIELDS:
         params.append(("fields[]", f))
-    return airtable_get(CALLS_TABLE, params)
+    all_records = airtable_get(CALLS_TABLE, params)
+    return [r for r in all_records if is_today(r["fields"].get("fldU5rZBoO1ofQ9s1", ""))]
 
 
 def fetch_eoc_today():
+    # Fetch recent EOC forms, filter by Call Date client-side
     now_ny   = datetime.now(TZ)
     date_str = now_ny.strftime("%Y-%m-%d")
     params = [
-        ("filterByFormula", f"{{Call Date}} = '{date_str}'"),
+        ("sort[0][field]", "fldBoYnkZXarRlibO"),
+        ("sort[0][direction]", "desc"),
+        ("maxRecords", 200),
         ("pageSize", 100),
     ]
     for f in EOC_FIELDS:
         params.append(("fields[]", f))
-    return airtable_get(EOC_TABLE, params)
+    all_records = airtable_get(EOC_TABLE, params)
+    return [r for r in all_records if r["fields"].get("fldBoYnkZXarRlibO") == date_str]
 
 
 # ── Meta Ads ───────────────────────────────────────────────────────────────────
