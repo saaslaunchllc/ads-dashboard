@@ -1,6 +1,6 @@
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta, time as dtime
 from collections import Counter
 import pytz
 
@@ -50,9 +50,9 @@ def airtable_get(table_id, params):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{table_id}"
     records, offset = [], None
     while True:
-        p = dict(params)
+        p = list(params) if isinstance(params, list) else list(params.items())
         if offset:
-            p["offset"] = offset
+            p.append(("offset", offset))
         r = requests.get(url, headers=headers, params=p, timeout=30)
         r.raise_for_status()
         data = r.json()
@@ -63,34 +63,49 @@ def airtable_get(table_id, params):
     return records
 
 
+def today_utc_range():
+    """Returns (start_utc, end_utc) strings covering today in New York time."""
+    now_ny    = datetime.now(TZ)
+    today     = now_ny.date()
+    tomorrow  = today + timedelta(days=1)
+    start_utc = TZ.localize(datetime.combine(today,    dtime.min)).astimezone(pytz.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    end_utc   = TZ.localize(datetime.combine(tomorrow, dtime.min)).astimezone(pytz.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    return start_utc, end_utc
+
+
 def fetch_leads_today():
-    now_ny   = datetime.now(TZ)
-    date_str = now_ny.strftime("%Y-%m-%d")
-    return airtable_get(LEADS_TABLE, {
-        "filterByFormula": f"IS_SAME({{Created Date}}, '{date_str}', 'day')",
-        "fields[]": LEAD_FIELDS,
-        "pageSize": 100,
-    })
+    start, end = today_utc_range()
+    params = [
+        ("filterByFormula", f"AND({{Created Date}} >= '{start}', {{Created Date}} < '{end}')"),
+        ("pageSize", 100),
+    ]
+    for f in LEAD_FIELDS:
+        params.append(("fields[]", f))
+    return airtable_get(LEADS_TABLE, params)
 
 
 def fetch_calls_today():
     now_ny   = datetime.now(TZ)
     date_str = now_ny.strftime("%Y-%m-%d")
-    return airtable_get(CALLS_TABLE, {
-        "filterByFormula": f"IS_SAME({{Scheduled Date}}, '{date_str}', 'day')",
-        "fields[]": CALL_FIELDS,
-        "pageSize": 100,
-    })
+    params = [
+        ("filterByFormula", f"{{Scheduled Date}} = '{date_str}'"),
+        ("pageSize", 100),
+    ]
+    for f in CALL_FIELDS:
+        params.append(("fields[]", f))
+    return airtable_get(CALLS_TABLE, params)
 
 
 def fetch_eoc_today():
     now_ny   = datetime.now(TZ)
     date_str = now_ny.strftime("%Y-%m-%d")
-    return airtable_get(EOC_TABLE, {
-        "filterByFormula": f"{{Call Date}} = '{date_str}'",
-        "fields[]": EOC_FIELDS,
-        "pageSize": 100,
-    })
+    params = [
+        ("filterByFormula", f"{{Call Date}} = '{date_str}'"),
+        ("pageSize", 100),
+    ]
+    for f in EOC_FIELDS:
+        params.append(("fields[]", f))
+    return airtable_get(EOC_TABLE, params)
 
 
 # ── Meta Ads ───────────────────────────────────────────────────────────────────
