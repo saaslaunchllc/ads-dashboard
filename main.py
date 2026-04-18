@@ -1,20 +1,22 @@
 import os
 import requests
-from datetime import datetime, timezone
+from datetime import datetime
 from collections import Counter
 import pytz
 
-# ── Config from environment variables ─────────────────────────────────────────
-AIRTABLE_TOKEN   = os.environ["AIRTABLE_TOKEN"]
-AIRTABLE_BASE_ID = os.environ.get("AIRTABLE_BASE_ID", "appHSMWWs3kPEhbYs")
-SLACK_TOKEN      = os.environ["SLACK_TOKEN"]
-SLACK_CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID", "C0ATPPQ99T2")
-TZ               = pytz.timezone("America/New_York")
+# ── Config ─────────────────────────────────────────────────────────────────────
+AIRTABLE_TOKEN    = os.environ["AIRTABLE_TOKEN"]
+AIRTABLE_BASE_ID  = os.environ.get("AIRTABLE_BASE_ID", "appHSMWWs3kPEhbYs")
+SLACK_TOKEN       = os.environ["SLACK_TOKEN"]
+SLACK_CHANNEL_ID  = os.environ.get("SLACK_CHANNEL_ID", "C0ATPPQ99T2")
+META_TOKEN        = os.environ["META_TOKEN"]
+META_AD_ACCOUNT   = os.environ.get("META_AD_ACCOUNT", "act_2489671261377664")
+TZ                = pytz.timezone("America/New_York")
 
-# ── Table / field constants ────────────────────────────────────────────────────
-LEADS_TABLE    = "tblOwhlWRgmMjsUXT"
-CALLS_TABLE    = "tbl1MC2Y0lPC6TVM2"
-EOC_TABLE      = "tblyJQjIG030lRGaB"
+# ── Table / field IDs ──────────────────────────────────────────────────────────
+LEADS_TABLE = "tblOwhlWRgmMjsUXT"
+CALLS_TABLE = "tbl1MC2Y0lPC6TVM2"
+EOC_TABLE   = "tblyJQjIG030lRGaB"
 
 LEAD_FIELDS = [
     "fldXdM92NA7p9nCrB",  # Name
@@ -37,10 +39,12 @@ EOC_FIELDS = [
     "fldBoYnkZXarRlibO",  # Call Date
     "fldQjeOUYZtKZzg4k",  # Form Type
     "fldIwbEIRm9es2G7R",  # Call Type
+    "fldkLuVFjv8FzB0sf",  # Calls link
     "fld9sohlGYtVKFKYP",  # Lead Quality
 ]
 
-# ── Airtable helpers ───────────────────────────────────────────────────────────
+
+# ── Airtable ───────────────────────────────────────────────────────────────────
 def airtable_get(table_id, params):
     headers = {"Authorization": f"Bearer {AIRTABLE_TOKEN}"}
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{table_id}"
@@ -49,7 +53,7 @@ def airtable_get(table_id, params):
         p = dict(params)
         if offset:
             p["offset"] = offset
-        r = requests.get(url, headers=headers, params=p)
+        r = requests.get(url, headers=headers, params=p, timeout=30)
         r.raise_for_status()
         data = r.json()
         records.extend(data.get("records", []))
@@ -59,90 +63,85 @@ def airtable_get(table_id, params):
     return records
 
 
-def today_formula():
-    """Returns an Airtable filterByFormula string for today in New York time."""
-    now_ny = datetime.now(TZ)
-    date_str = now_ny.strftime("%Y-%m-%d")
-    return f"IS_SAME({{Created Date}}, '{date_str}', 'day')"
-
-
-def today_call_formula():
-    now_ny = datetime.now(TZ)
-    date_str = now_ny.strftime("%Y-%m-%d")
-    return f"IS_SAME({{Scheduled Date}}, '{date_str}', 'day')"
-
-
-def today_eoc_formula():
-    now_ny = datetime.now(TZ)
-    date_str = now_ny.strftime("%Y-%m-%d")
-    return f"{{Call Date}} = '{date_str}'"
-
-
-# ── Data fetching ──────────────────────────────────────────────────────────────
 def fetch_leads_today():
-    now_ny = datetime.now(TZ)
+    now_ny   = datetime.now(TZ)
     date_str = now_ny.strftime("%Y-%m-%d")
-    formula = f"IS_SAME({{Created Date}}, '{date_str}', 'day')"
-    params = {
-        "filterByFormula": formula,
+    return airtable_get(LEADS_TABLE, {
+        "filterByFormula": f"IS_SAME({{Created Date}}, '{date_str}', 'day')",
         "fields[]": LEAD_FIELDS,
         "pageSize": 100,
-    }
-    return airtable_get(LEADS_TABLE, params)
+    })
 
 
 def fetch_calls_today():
-    now_ny = datetime.now(TZ)
+    now_ny   = datetime.now(TZ)
     date_str = now_ny.strftime("%Y-%m-%d")
-    formula = f"IS_SAME({{Scheduled Date}}, '{date_str}', 'day')"
-    params = {
-        "filterByFormula": formula,
+    return airtable_get(CALLS_TABLE, {
+        "filterByFormula": f"IS_SAME({{Scheduled Date}}, '{date_str}', 'day')",
         "fields[]": CALL_FIELDS,
         "pageSize": 100,
-    }
-    return airtable_get(CALLS_TABLE, params)
+    })
 
 
 def fetch_eoc_today():
-    now_ny = datetime.now(TZ)
+    now_ny   = datetime.now(TZ)
     date_str = now_ny.strftime("%Y-%m-%d")
-    formula = f"{{Call Date}} = '{date_str}'"
-    params = {
-        "filterByFormula": formula,
+    return airtable_get(EOC_TABLE, {
+        "filterByFormula": f"{{Call Date}} = '{date_str}'",
         "fields[]": EOC_FIELDS,
         "pageSize": 100,
+    })
+
+
+# ── Meta Ads ───────────────────────────────────────────────────────────────────
+def fetch_meta_spend_today():
+    """Returns {campaign_name: spend_float} for today."""
+    url = f"https://graph.facebook.com/v19.0/{META_AD_ACCOUNT}/insights"
+    params = {
+        "access_token": META_TOKEN,
+        "fields":        "campaign_name,spend,impressions,clicks,reach",
+        "date_preset":   "today",
+        "level":         "campaign",
+        "limit":         500,
     }
-    return airtable_get(EOC_TABLE, params)
+    r = requests.get(url, params=params, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+
+    spend_by_campaign = {}
+    for row in data.get("data", []):
+        name  = row.get("campaign_name", "Unknown")
+        spend = float(row.get("spend", 0))
+        spend_by_campaign[name] = spend_by_campaign.get(name, 0) + spend
+
+    return spend_by_campaign
 
 
 # ── Deduplication ──────────────────────────────────────────────────────────────
 def dedup_leads(records):
-    """Remove duplicate opt-ins by email (keep first occurrence)."""
-    seen_emails, seen_names, unique = set(), set(), []
+    seen, unique = set(), []
     for r in records:
-        f = r.get("fields", {})
+        f     = r.get("fields", {})
         email = (f.get("fldsiSb8Ex839c9z7") or "").strip().lower()
         name  = (f.get("fldXdM92NA7p9nCrB") or "").strip().lower()
         key   = email if email else name
-        if key and key not in seen_emails:
-            seen_emails.add(key)
+        if key and key not in seen:
+            seen.add(key)
             unique.append(r)
     return unique
 
 
-# ── Metric computation ─────────────────────────────────────────────────────────
+# ── Metrics ────────────────────────────────────────────────────────────────────
 def compute_leads_metrics(records):
-    total   = len(records)
-    booked  = sum(1 for r in records if r["fields"].get("fldq0Cz20MfRBlnhI") == "Call Booked")
-    closed  = sum(1 for r in records if r["fields"].get("fldmq1KKFazWEfYUP") == "Closed")
-    revenue = sum(r["fields"].get("fldAXr9uO38qdgleU") or 0 for r in records)
+    total        = len(records)
+    booked       = sum(1 for r in records if r["fields"].get("fldq0Cz20MfRBlnhI") == "Call Booked")
+    closed       = sum(1 for r in records if r["fields"].get("fldmq1KKFazWEfYUP") == "Closed")
+    revenue      = sum(r["fields"].get("fldAXr9uO38qdgleU") or 0 for r in records)
     booking_rate = (booked / total * 100) if total > 0 else 0
 
-    # Per-campaign breakdown (deduplicate bookings by email within campaign)
-    camp_data = {}
-    booked_emails = set()
+    camp_data, booked_emails = {}, set()
     for r in records:
-        f       = r["fields"]
+        f        = r["fields"]
         campaign = f.get("fldWqLT9NYzo3I01k") or "Unattributed"
         email    = (f.get("fldsiSb8Ex839c9z7") or "").strip().lower()
         is_booked = f.get("fldq0Cz20MfRBlnhI") == "Call Booked"
@@ -151,100 +150,99 @@ def compute_leads_metrics(records):
             camp_data[campaign] = {"leads": 0, "booked": 0}
         camp_data[campaign]["leads"] += 1
 
-        # Only count booking once per unique email
         if is_booked and email not in booked_emails:
             camp_data[campaign]["booked"] += 1
             booked_emails.add(email)
 
     return {
-        "total": total,
-        "booked": booked,
-        "closed": closed,
-        "revenue": revenue,
-        "booking_rate": booking_rate,
+        "total": total, "booked": booked, "closed": closed,
+        "revenue": revenue, "booking_rate": booking_rate,
         "campaigns": camp_data,
     }
 
 
 def compute_calls_metrics(call_records, eoc_records):
-    # Cancelled calls from Calls table
+    # Cancelled calls
     cancelled = []
     for r in call_records:
         f      = r["fields"]
-        status = (f.get("fldtm2dOO2DAbIvqM") or {})
+        status = f.get("fldtm2dOO2DAbIvqM") or {}
         if isinstance(status, dict):
             status = status.get("name", "")
         if status == "Cancelled":
-            name     = f.get("fldvqkY6pmRVKHq4s", "Unknown")
-            sched_dt = f.get("fldU5rZBoO1ofQ9s1", "")
-            # Parse time for display
+            name = f.get("fldvqkY6pmRVKHq4s", "Unknown")
+            sched = f.get("fldU5rZBoO1ofQ9s1", "")
             try:
-                dt  = datetime.fromisoformat(sched_dt.replace("Z", "+00:00"))
-                t   = dt.astimezone(TZ).strftime("%-I:%M %p")
+                dt = datetime.fromisoformat(sched.replace("Z", "+00:00"))
+                t  = dt.astimezone(TZ).strftime("%-I:%M %p")
             except Exception:
                 t = ""
             cancelled.append({"name": name, "time": t})
 
-    # EOC forms breakdown
     cc_forms     = [r for r in eoc_records if (r["fields"].get("fldQjeOUYZtKZzg4k") or {}).get("name") == "Sales Call Outcome Form"]
     triage_forms = [r for r in eoc_records if (r["fields"].get("fldQjeOUYZtKZzg4k") or {}).get("name") == "Triage Outcome Form"]
 
-    # CC outcomes
-    def outcome_name(r):
+    def outcome(r):
         o = r["fields"].get("fldlXS3X8SwnoV7SQ")
         return (o or {}).get("name", "") if isinstance(o, dict) else (o or "")
 
-    sent_to_cc  = [r for r in cc_forms if outcome_name(r) == "Sent to CC"]
-    no_show_ss  = [r for r in cc_forms if outcome_name(r) == "No Show SS"]
-    no_show_cc  = [r for r in cc_forms if outcome_name(r) == "No Show CC"]
-    deposit     = [r for r in cc_forms if outcome_name(r) == "Deposit"]
-    lost        = [r for r in cc_forms if outcome_name(r) == "Lost"]
-    closed_cc   = [r for r in cc_forms if outcome_name(r) in ("Deposit", "Won")]
+    def person_name(r):
+        links = r["fields"].get("fldkLuVFjv8FzB0sf")
+        if links and isinstance(links, list):
+            return links[0].get("name", "?")
+        return r["fields"].get("fld0BTtBm0EBrK6Bf", "?")
 
-    showed    = len(sent_to_cc) + len(deposit) + len(lost) + len(closed_cc)
-    no_shows  = len(no_show_ss) + len(no_show_cc)
+    sent_to_cc = [r for r in cc_forms if outcome(r) == "Sent to CC"]
+    no_show_ss = [r for r in cc_forms if outcome(r) == "No Show SS"]
+    no_show_cc = [r for r in cc_forms if outcome(r) == "No Show CC"]
+    deposit    = [r for r in cc_forms if outcome(r) == "Deposit"]
+    lost       = [r for r in cc_forms if outcome(r) == "Lost"]
+
+    showed      = len(sent_to_cc) + len(deposit) + len(lost)
+    no_shows    = len(no_show_ss) + len(no_show_cc)
     total_sched = showed + no_shows
-    show_rate = (showed / total_sched * 100) if total_sched > 0 else 0
+    show_rate   = (showed / total_sched * 100) if total_sched > 0 else 0
 
-    # Lead quality from triage forms
-    def lead_quality(r):
+    def quality_label(r):
         q = r["fields"].get("fld9sohlGYtVKFKYP")
         if isinstance(q, dict):
             name = q.get("name", "")
-            # Strip emoji prefix
-            return name.split(" ", 1)[-1] if name else "Unknown"
+            parts = name.split(" ", 1)
+            return parts[-1] if len(parts) > 1 else name
         return str(q) if q else "Unknown"
 
-    quality_counts = Counter(lead_quality(r) for r in triage_forms)
+    quality_counts = Counter(quality_label(r) for r in triage_forms)
 
     return {
-        "cancelled": cancelled,
-        "cc_total": total_sched,
-        "showed": showed,
-        "no_show_ss": len(no_show_ss),
-        "no_show_cc": len(no_show_cc),
-        "show_rate": show_rate,
-        "sent_to_cc_names": [r["fields"].get("fldkLuVFjv8FzB0sf", [{}])[0].get("name", "?") if r["fields"].get("fldkLuVFjv8FzB0sf") else r["fields"].get("fld0BTtBm0EBrK6Bf", "?") for r in sent_to_cc],
-        "no_show_ss_names": [r["fields"].get("fldkLuVFjv8FzB0sf", [{}])[0].get("name", "?") if r["fields"].get("fldkLuVFjv8FzB0sf") else r["fields"].get("fld0BTtBm0EBrK6Bf", "?") for r in no_show_ss],
-        "triage_total": len(triage_forms),
-        "triage_quality": quality_counts,
-        "cash_collected": sum(0 for _ in closed_cc),  # extend if cash field available
+        "cancelled":       cancelled,
+        "cc_total":        total_sched,
+        "showed":          showed,
+        "no_show_ss":      len(no_show_ss),
+        "no_show_cc":      len(no_show_cc),
+        "show_rate":       show_rate,
+        "sent_to_cc_names": [person_name(r) for r in sent_to_cc],
+        "no_show_ss_names": [person_name(r) for r in no_show_ss],
+        "triage_total":    len(triage_forms),
+        "triage_quality":  quality_counts,
     }
 
 
-# ── Message formatting ─────────────────────────────────────────────────────────
-def format_message(leads_m, calls_m):
+# ── Message ────────────────────────────────────────────────────────────────────
+def format_message(leads_m, calls_m, meta_spend):
     now_ny   = datetime.now(TZ)
     date_str = now_ny.strftime("%A, %B %-d, %Y").upper()
+
+    # Total Meta spend today
+    total_meta_spend = sum(meta_spend.values())
 
     lines = [
         f"*DAILY AD PERFORMANCE — {date_str}*",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         "",
         "*TODAY'S LEADS*",
-        f"New Leads: *{leads_m['total']}*   |   Booked: *{leads_m['booked']}*   |   "
-        f"Booking Rate: *{leads_m['booking_rate']:.1f}%*   |   "
-        f"Closed: *{leads_m['closed']}*   |   Revenue: *${leads_m['revenue']:,.0f}*",
+        (f"New Leads: *{leads_m['total']}*   |   Booked: *{leads_m['booked']}*   |   "
+         f"Booking Rate: *{leads_m['booking_rate']:.1f}%*   |   "
+         f"Closed: *{leads_m['closed']}*   |   Revenue: *${leads_m['revenue']:,.0f}*"),
         "",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         "",
@@ -257,7 +255,9 @@ def format_message(leads_m, calls_m):
     lines += [
         "",
         f"*CLOSER CALLS — {calls_m['cc_total']} SCHEDULED*",
-        f"Showed: *{calls_m['showed']}*   |   No Show: *{calls_m['no_show_ss'] + calls_m['no_show_cc']}*   |   Show Rate: *{calls_m['show_rate']:.0f}%*",
+        (f"Showed: *{calls_m['showed']}*   |   "
+         f"No Show: *{calls_m['no_show_ss'] + calls_m['no_show_cc']}*   |   "
+         f"Show Rate: *{calls_m['show_rate']:.0f}%*"),
     ]
 
     if calls_m["sent_to_cc_names"]:
@@ -273,23 +273,50 @@ def format_message(leads_m, calls_m):
         lines.append(f"  {c['name']} — {c['time']}")
 
     lines += [
-        f"Closed on Call: *0*   |   Cash Collected: *$0*",
         "",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         "",
-        "*ACTIVE CAMPAIGNS TODAY*",
+        f"*META ADS — TODAY'S SPEND*",
+        f"Total Spend: *${total_meta_spend:,.2f}*",
         "",
     ]
 
-    for camp, data in sorted(leads_m["campaigns"].items(), key=lambda x: -x[1]["leads"]):
-        br = (data["booked"] / data["leads"] * 100) if data["leads"] > 0 else 0
+    # Per active FB campaign spend + Airtable lead match
+    airtable_camps = leads_m["campaigns"]
+    all_camps = set(list(meta_spend.keys()) + list(airtable_camps.keys()))
+
+    for camp in sorted(all_camps, key=lambda c: -meta_spend.get(c, 0)):
+        if camp == "Unattributed":
+            continue
+        spend   = meta_spend.get(camp, 0)
+        at_data = airtable_camps.get(camp, {"leads": 0, "booked": 0})
+        leads   = at_data["leads"]
+        booked  = at_data["booked"]
+        br      = (booked / leads * 100) if leads > 0 else 0
+        cpbc    = (spend / booked) if booked > 0 else 0
+        spend_str = f"${spend:,.2f}" if spend > 0 else "$0"
+        cpbc_str  = f"${cpbc:,.0f}" if cpbc > 0 else "—"
+
         lines.append(f"*{camp}*")
-        lines.append(f"Leads: *{data['leads']}*   |   Booked: *{data['booked']}*   |   Booking Rate: *{br:.0f}%*")
+        lines.append(
+            f"Spend: *{spend_str}*   |   Leads: *{leads}*   |   "
+            f"Booked: *{booked}*   |   Booking Rate: *{br:.0f}%*   |   CPBC: *{cpbc_str}*"
+        )
         lines.append("")
+
+    # Unattributed
+    if "Unattributed" in airtable_camps:
+        d  = airtable_camps["Unattributed"]
+        br = (d["booked"] / d["leads"] * 100) if d["leads"] > 0 else 0
+        lines += [
+            "*Unattributed*",
+            f"Leads: *{d['leads']}*   |   Booked: *{d['booked']}*   |   Booking Rate: *{br:.0f}%*",
+            "",
+        ]
 
     lines += [
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        f"_Source: Airtable · EOC Forms · {now_ny.strftime('%b %-d, %Y')}_",
+        f"_Source: Airtable · Meta Ads · EOC Forms · {now_ny.strftime('%b %-d, %Y')}_",
     ]
 
     return "\n".join(lines)
@@ -301,33 +328,37 @@ def send_slack(message):
         "https://slack.com/api/chat.postMessage",
         headers={
             "Authorization": f"Bearer {SLACK_TOKEN}",
-            "Content-Type": "application/json",
+            "Content-Type":  "application/json",
         },
         json={"channel": SLACK_CHANNEL_ID, "text": message},
+        timeout=30,
     )
     r.raise_for_status()
     data = r.json()
     if not data.get("ok"):
         raise RuntimeError(f"Slack error: {data.get('error')}")
-    print(f"Sent to Slack: {data['ts']}")
+    print(f"Sent: {data['ts']}")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
-    print("Fetching Airtable data...")
+    print("Fetching data...")
     raw_leads  = fetch_leads_today()
     leads      = dedup_leads(raw_leads)
     calls      = fetch_calls_today()
     eoc        = fetch_eoc_today()
+    meta_spend = fetch_meta_spend_today()
 
-    print(f"  Leads today (deduped): {len(leads)} (raw: {len(raw_leads)})")
-    print(f"  Calls today: {len(calls)}")
-    print(f"  EOC forms today: {len(eoc)}")
+    print(f"  Leads (deduped): {len(leads)} / raw: {len(raw_leads)}")
+    print(f"  Calls: {len(calls)}  |  EOC forms: {len(eoc)}")
+    print(f"  Meta campaigns with spend today: {len(meta_spend)}")
+    for k, v in meta_spend.items():
+        print(f"    {k}: ${v:.2f}")
 
     leads_m = compute_leads_metrics(leads)
     calls_m = compute_calls_metrics(calls, eoc)
+    message = format_message(leads_m, calls_m, meta_spend)
 
-    message = format_message(leads_m, calls_m)
     print("\n── MESSAGE PREVIEW ──")
     print(message)
     print("────────────────────\n")
